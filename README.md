@@ -63,5 +63,3 @@ anbarman/
 ├── jalali.py        # تاریخ شمسی
 └── ui.py            # رابط کاربری
 anbarman.pyw         # نقطه اجرا
-
-داده‌ها در مسیر %APPDATA%\Anbarman ذخیره می‌شوند.
