@@ -1,1 +1,178 @@
+name: Build Anbarman Windows Setup
 
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-windows:
+    name: Build Windows Setup
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install PyInstaller
+        run: pip install pyinstaller
+
+      - name: Build EXE with PyInstaller (modular package)
+        shell: bash
+        run: |
+          set -euo pipefail
+          # نقطه ورود: anbarman.pyw کنار پکیج anbarman/
+          # --add-data برای assets (فونت، لوگو، آیکون)
+          pyinstaller \
+            --noconfirm \
+            --clean \
+            --onefile \
+            --windowed \
+            --name Anbarman \
+            --icon anbarman/assets/app_ico.ico \
+            --add-data "anbarman/assets;anbarman/assets" \
+            --hidden-import anbarman \
+            --hidden-import anbarman.ui \
+            --hidden-import anbarman.database \
+            --hidden-import anbarman.prices \
+            --hidden-import anbarman.jalali \
+            --hidden-import anbarman.theme \
+            --hidden-import anbarman.icons \
+            --collect-all anbarman \
+            anbarman.pyw
+
+      - name: Verify EXE
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/Anbarman.exe
+          ls -lh dist/Anbarman.exe
+
+      - name: Create Inno Setup script
+        shell: bash
+        run: |
+          cat > installer.iss << 'ISS'
+          #define MyAppName "انبارمن"
+          #define MyAppNameEn "Anbarman"
+          #define MyAppVersion "1.0.0"
+          #define MyAppPublisher "Anbarman"
+          #define MyAppURL "https://myhadipour.ir/anbarman"
+          #define MyAppExeName "Anbarman.exe"
+
+          [Setup]
+          AppId={{A1B2C3D4-E5F6-7890-ABCD-EF1234567890}
+          AppName={#MyAppName}
+          AppVersion={#MyAppVersion}
+          AppPublisher={#MyAppPublisher}
+          AppPublisherURL={#MyAppURL}
+          AppSupportURL={#MyAppURL}
+          DefaultDirName={autopf}\{#MyAppNameEn}
+          DefaultGroupName={#MyAppName}
+          DisableProgramGroupPage=yes
+          OutputDir=release-out
+          OutputBaseFilename=Anbarman-Setup
+          Compression=lzma
+          SolidCompression=yes
+          WizardStyle=modern
+          PrivilegesRequired=lowest
+          ArchitecturesAllowed=x64compatible
+          ArchitecturesInstallIn64BitMode=x64compatible
+          UninstallDisplayIcon={app}\{#MyAppExeName}
+          SetupIconFile=anbarman\assets\app_ico.ico
+          WizardImageFile=anbarman\assets\logo.bmp
+          WizardSmallImageFile=anbarman\assets\logo-small.bmp
+          VersionInfoVersion={#MyAppVersion}
+          VersionInfoCompany={#MyAppPublisher}
+          VersionInfoDescription=Anbarman Shop Inventory
+          VersionInfoProductName={#MyAppNameEn}
+
+          [Languages]
+          Name: "english"; MessagesFile: "compiler:Default.isl"
+
+          [Tasks]
+          Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: checkedonce
+
+          [Files]
+          Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
+
+          [Icons]
+          Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; IconFilename: "{app}\{#MyAppExeName}"
+          Name: "{group}\{cm:UninstallProgram,{#MyAppName}}"; Filename: "{uninstallexe}"
+          Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: desktopicon
+
+          [Run]
+          Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppNameEn}}"; Flags: nowait postinstall skipifsilent
+          ISS
+
+      - name: Prepare wizard logo BMP for Inno Setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - << 'PY'
+          from pathlib import Path
+          try:
+              from PIL import Image
+          except ImportError:
+              import subprocess, sys
+              subprocess.check_call([sys.executable, "-m", "pip", "install", "pillow"])
+              from PIL import Image
+          src = Path("anbarman/assets/logo.png")
+          im = Image.open(src).convert("RGBA")
+          # Wizard large image ~164x314 classic; modern uses different sizes — pad to white
+          def make(size, out):
+              bg = Image.new("RGB", size, (255, 255, 255))
+              im2 = im.copy()
+              im2.thumbnail((size[0]-20, size[1]-20), Image.LANCZOS)
+              x = (size[0] - im2.size[0]) // 2
+              y = (size[1] - im2.size[1]) // 2
+              if im2.mode == "RGBA":
+                  bg.paste(im2, (x, y), im2)
+              else:
+                  bg.paste(im2, (x, y))
+              bg.save(out, "BMP")
+          make((164, 314), "anbarman/assets/logo.bmp")
+          make((55, 55), "anbarman/assets/logo-small.bmp")
+          print("wizard BMPs ready")
+          PY
+
+      - name: Install Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Compile Setup installer
+        run: |
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" installer.iss
+
+      - name: Verify Setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s release-out/Anbarman-Setup.exe
+          cp dist/Anbarman.exe release-out/Anbarman-Portable.exe
+          ls -lh release-out/
+
+      - name: Upload Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Anbarman-Windows
+          path: |
+            release-out/Anbarman-Setup.exe
+            release-out/Anbarman-Portable.exe
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload to Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release-out/Anbarman-Setup.exe
+            release-out/Anbarman-Portable.exe
